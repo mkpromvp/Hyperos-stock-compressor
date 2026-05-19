@@ -14,13 +14,14 @@ on:
         type: choice
         options:
           - xz
+          - xz-extreme
           - zstd
-          - bzip2
+          - 7zip
 
 jobs:
   compress:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Free disk space
@@ -34,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            wget pv xz-utils zstd pbzip2
+            wget pv xz-utils zstd pbzip2 p7zip-full
 
       - name: Download ROM
         run: |
@@ -55,17 +56,39 @@ jobs:
           mkdir -p rom_extracted
           pv rom_original.tgz | tar -xz -C rom_extracted
           rm -f rom_original.tgz
+          echo "Contents:"
+          ls -lh rom_extracted/
           df -h
 
+      - name: Verify extracted files
+        run: |
+          echo "Checking .img files integrity..."
+          find rom_extracted -name "*.img" | while read f; do
+            SIZE=$(du -sh "$f" | cut -f1)
+            echo "OK: $f ($SIZE)"
+          done
+
+      # ── xz standard ───────────────────────────────────────────────────────
       - name: Recompress (xz)
         if: ${{ github.event.inputs.compression == 'xz' }}
         run: |
-          echo "Repacking with xz -9 multi-thread..."
-          tar -c -C rom_extracted . | xz -9 -T0 > "${{ env.ROM_NAME }}_xz9.tar.xz"
-          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_xz9.tar.xz" | cut -f1)
+          echo "Repacking with xz -9 -T0..."
+          tar -c -C rom_extracted . | xz -9 -T0 > "${{ env.ROM_NAME }}.tar.xz"
+          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}.tar.xz" | cut -f1)
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
-          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_xz9.tar.xz" >> $GITHUB_ENV
+          echo "OUTPUT_FILE=${{ env.ROM_NAME }}.tar.xz" >> $GITHUB_ENV
 
+      # ── xz extreme (أقصى ضغط بدون 7zip) ──────────────────────────────────
+      - name: Recompress (xz-extreme)
+        if: ${{ github.event.inputs.compression == 'xz-extreme' }}
+        run: |
+          echo "Repacking with xz -9e -T0 (extreme)..."
+          tar -c -C rom_extracted . | xz -9e -T0 > "${{ env.ROM_NAME }}_extreme.tar.xz"
+          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_extreme.tar.xz" | cut -f1)
+          echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
+          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_extreme.tar.xz" >> $GITHUB_ENV
+
+      # ── zstd ──────────────────────────────────────────────────────────────
       - name: Recompress (zstd)
         if: ${{ github.event.inputs.compression == 'zstd' }}
         run: |
@@ -73,19 +96,49 @@ jobs:
           THREADS=$(nproc)
           tar -c -C rom_extracted . \
             | zstd --ultra -22 -T$THREADS \
-            > "${{ env.ROM_NAME }}_zst22.tar.zst"
-          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_zst22.tar.zst" | cut -f1)
+            > "${{ env.ROM_NAME }}.tar.zst"
+          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}.tar.zst" | cut -f1)
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
-          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_zst22.tar.zst" >> $GITHUB_ENV
+          echo "OUTPUT_FILE=${{ env.ROM_NAME }}.tar.zst" >> $GITHUB_ENV
 
-      - name: Recompress (bzip2)
-        if: ${{ github.event.inputs.compression == 'bzip2' }}
+      # ── 7zip LZMA2 ultra (أقصى ضغط ممكن) ─────────────────────────────────
+      - name: Recompress (7zip)
+        if: ${{ github.event.inputs.compression == '7zip' }}
         run: |
-          echo "Repacking with pbzip2 -9..."
-          tar -c -C rom_extracted . | pbzip2 -9 > "${{ env.ROM_NAME }}_bz9.tar.bz2"
-          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_bz9.tar.bz2" | cut -f1)
+          echo "Repacking with 7zip LZMA2 ultra..."
+          # -mmt = كل الـ threads
+          # -mx=9 = أقصى ضغط
+          # -mfb=273 = أكبر word size
+          # -md=1536m = أكبر dictionary ممكن على الـ runner
+          # -ms=on = solid archive (بيضغط الملفات مع بعض)
+          7za a -t7z \
+              -m0=lzma2 \
+              -mx=9 \
+              -mfb=273 \
+              -md=1536m \
+              -ms=on \
+              -mmt=on \
+              "${{ env.ROM_NAME }}_ultra.7z" \
+              ./rom_extracted/*
+          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_ultra.7z" | cut -f1)
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
-          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_bz9.tar.bz2" >> $GITHUB_ENV
+          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_ultra.7z" >> $GITHUB_ENV
+
+      # ── تحقق من سلامة الملف المضغوط قبل الرفع ────────────────────────────
+      - name: Verify compressed file
+        run: |
+          echo "Verifying output file..."
+          case "${{ github.event.inputs.compression }}" in
+            xz|xz-extreme)
+              xz --test "${{ env.OUTPUT_FILE }}" && echo "XZ file is valid"
+              ;;
+            zstd)
+              zstd --test "${{ env.OUTPUT_FILE }}" && echo "ZSTD file is valid"
+              ;;
+            7zip)
+              7za t "${{ env.OUTPUT_FILE }}" && echo "7z file is valid"
+              ;;
+          esac
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
