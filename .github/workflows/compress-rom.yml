@@ -13,103 +13,92 @@ on:
         default: "xz"
         type: choice
         options:
-          - xz       # Best ratio (slowest)
-          - zstd     # Best ratio/speed balance
-          - bzip2    # Middle ground
+          - xz
+          - zstd
+          - bzip2
 
 jobs:
   compress:
     runs-on: ubuntu-latest
-    # Allow enough time for large ROMs (4–6 GB)
     timeout-minutes: 120
 
     steps:
-      # ── 1. Free up as much disk space as possible ──────────────────────────
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
+          sudo rm -rf /usr/local/lib/android &
+          sudo rm -rf /usr/share/dotnet &
+          wait
           df -h
 
-      # ── 2. Install tools ───────────────────────────────────────────────────
       - name: Install compression tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            wget pv pixz zstd pbzip2 pxz
+            wget pv xz-utils zstd pbzip2
 
-      # ── 3. Download ROM ────────────────────────────────────────────────────
       - name: Download ROM
         run: |
-          echo "⬇️  Downloading ROM..."
+          echo "Downloading ROM..."
           wget --show-progress -q \
                --content-disposition \
                -O rom_original.tgz \
                "${{ github.event.inputs.rom_url }}"
-
           ORIG_SIZE=$(du -sh rom_original.tgz | cut -f1)
-          echo "📦 Original size: $ORIG_SIZE"
+          echo "Original size: $ORIG_SIZE"
           echo "ORIG_SIZE=$ORIG_SIZE" >> $GITHUB_ENV
-
-          # Extract ROM filename from URL for the output file
           ROM_NAME=$(basename "${{ github.event.inputs.rom_url }}" .tgz)
           echo "ROM_NAME=$ROM_NAME" >> $GITHUB_ENV
 
-      # ── 4. Extract ────────────────────────────────────────────────────────
       - name: Extract ROM
         run: |
-          echo "📂 Extracting..."
+          echo "Extracting..."
           mkdir -p rom_extracted
           pv rom_original.tgz | tar -xz -C rom_extracted
-          rm -f rom_original.tgz   # free space immediately
+          rm -f rom_original.tgz
           df -h
 
-      # ── 5. Recompress ─────────────────────────────────────────────────────
       - name: Recompress (xz)
         if: ${{ github.event.inputs.compression == 'xz' }}
         run: |
-          echo "🔧 Repacking with xz -9e (extreme, multi-thread)..."
-          # pixz = parallel xz
-          tar -c -C rom_extracted . | pixz -9 > "${{ env.ROM_NAME }}_xz9.tar.xz"
+          echo "Repacking with xz -9 multi-thread..."
+          tar -c -C rom_extracted . | xz -9 -T0 > "${{ env.ROM_NAME }}_xz9.tar.xz"
           NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_xz9.tar.xz" | cut -f1)
-          echo "✅ New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
+          echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}_xz9.tar.xz" >> $GITHUB_ENV
 
       - name: Recompress (zstd)
         if: ${{ github.event.inputs.compression == 'zstd' }}
         run: |
-          echo "🔧 Repacking with zstd --ultra -22 (multi-thread)..."
+          echo "Repacking with zstd --ultra -22..."
           THREADS=$(nproc)
           tar -c -C rom_extracted . \
             | zstd --ultra -22 -T$THREADS \
             > "${{ env.ROM_NAME }}_zst22.tar.zst"
           NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_zst22.tar.zst" | cut -f1)
-          echo "✅ New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
+          echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}_zst22.tar.zst" >> $GITHUB_ENV
 
       - name: Recompress (bzip2)
         if: ${{ github.event.inputs.compression == 'bzip2' }}
         run: |
-          echo "🔧 Repacking with pbzip2 -9 (parallel bzip2)..."
+          echo "Repacking with pbzip2 -9..."
           tar -c -C rom_extracted . | pbzip2 -9 > "${{ env.ROM_NAME }}_bz9.tar.bz2"
           NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_bz9.tar.bz2" | cut -f1)
-          echo "✅ New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
+          echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}_bz9.tar.bz2" >> $GITHUB_ENV
 
-      # ── 6. Upload as GitHub Release ────────────────────────────────────────
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "rom-${{ github.run_number }}"
-          name: "ROM Build #${{ github.run_number }} — ${{ env.ROM_NAME }}"
+          name: "ROM Build #${{ github.run_number }} - ${{ env.ROM_NAME }}"
           body: |
-            ## 📱 Xiaomi FastBoot ROM (Recompressed)
-            | Field        | Value |
-            |-------------|-------|
-            | Original    | ${{ env.ORIG_SIZE }} |
-            | Algorithm   | ${{ github.event.inputs.compression }} |
-            | Source URL  | ${{ github.event.inputs.rom_url }} |
+            ## Xiaomi FastBoot ROM (Recompressed)
+            | Field      | Value |
+            |-----------|-------|
+            | Original  | ${{ env.ORIG_SIZE }} |
+            | Algorithm | ${{ github.event.inputs.compression }} |
+            | Source    | ${{ github.event.inputs.rom_url }} |
           files: ${{ env.OUTPUT_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
