@@ -47,7 +47,7 @@ jobs:
           ORIG_SIZE=$(du -sh rom_original.tgz | cut -f1)
           echo "Original size: $ORIG_SIZE"
           echo "ORIG_SIZE=$ORIG_SIZE" >> $GITHUB_ENV
-          ROM_NAME=$(basename "${{ github.event.inputs.rom_url }}" .tgz)
+          ROM_NAME=$(basename "${{ github.event.inputs.rom_url }}" .tgz | cut -c1-50)
           echo "ROM_NAME=$ROM_NAME" >> $GITHUB_ENV
 
       - name: Extract ROM
@@ -68,7 +68,6 @@ jobs:
             echo "OK: $f ($SIZE)"
           done
 
-      # ── xz standard ───────────────────────────────────────────────────────
       - name: Recompress (xz)
         if: ${{ github.event.inputs.compression == 'xz' }}
         run: |
@@ -78,7 +77,6 @@ jobs:
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}.tar.xz" >> $GITHUB_ENV
 
-      # ── xz extreme (أقصى ضغط بدون 7zip) ──────────────────────────────────
       - name: Recompress (xz-extreme)
         if: ${{ github.event.inputs.compression == 'xz-extreme' }}
         run: |
@@ -88,7 +86,6 @@ jobs:
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}_extreme.tar.xz" >> $GITHUB_ENV
 
-      # ── zstd ──────────────────────────────────────────────────────────────
       - name: Recompress (zstd)
         if: ${{ github.event.inputs.compression == 'zstd' }}
         run: |
@@ -101,16 +98,11 @@ jobs:
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
           echo "OUTPUT_FILE=${{ env.ROM_NAME }}.tar.zst" >> $GITHUB_ENV
 
-      # ── 7zip LZMA2 ultra (أقصى ضغط ممكن) ─────────────────────────────────
       - name: Recompress (7zip)
         if: ${{ github.event.inputs.compression == '7zip' }}
         run: |
           echo "Repacking with 7zip LZMA2 ultra..."
-          # -mmt = كل الـ threads
-          # -mx=9 = أقصى ضغط
-          # -mfb=273 = أكبر word size
-          # -md=1536m = أكبر dictionary ممكن على الـ runner
-          # -ms=on = solid archive (بيضغط الملفات مع بعض)
+          OUTPUT="${{ env.ROM_NAME }}_ultra.7z"
           7za a -t7z \
               -m0=lzma2 \
               -mx=9 \
@@ -118,13 +110,12 @@ jobs:
               -md=1536m \
               -ms=on \
               -mmt=on \
-              "${{ env.ROM_NAME }}_ultra.7z" \
+              "$OUTPUT" \
               ./rom_extracted/*
-          NEW_SIZE=$(du -sh "${{ env.ROM_NAME }}_ultra.7z" | cut -f1)
+          NEW_SIZE=$(du -sh "$OUTPUT" | cut -f1)
           echo "New size: $NEW_SIZE  (was ${{ env.ORIG_SIZE }})"
-          echo "OUTPUT_FILE=${{ env.ROM_NAME }}_ultra.7z" >> $GITHUB_ENV
+          echo "OUTPUT_FILE=$OUTPUT" >> $GITHUB_ENV
 
-      # ── تحقق من سلامة الملف المضغوط قبل الرفع ────────────────────────────
       - name: Verify compressed file
         run: |
           echo "Verifying output file..."
